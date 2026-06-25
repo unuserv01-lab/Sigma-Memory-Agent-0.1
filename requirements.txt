@@ -1,0 +1,9 @@
+openai>=1.30.0
+numpy>=1.24.0
+python-dotenv>=1.0.0
+
+# Optional: DeepSeek audit (no extra package needed — uses openai SDK)
+# Optional: testing
+pytest>=7.0
+pytest-cov
+
