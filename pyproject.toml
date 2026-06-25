@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name            = "sigma-memory-agent"
+version         = "1.0.0"
+description     = "Persistent, queryable, quality-aware memory middleware for AI agents"
+readme          = "README.md"
+requires-python = ">=3.10"
+license         = { text = "MIT" }
+keywords        = ["AI", "memory", "agent", "LLM", "Qwen", "RAG"]
+classifiers     = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+dependencies    = [
+    "openai>=1.30.0",
+    "numpy>=1.24.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev  = ["pytest>=7.0", "pytest-cov"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sma*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
