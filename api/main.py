@@ -32,6 +32,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from sma import SMAClient, SMAConfig
+from api.demo import router as demo_router
 
 
 # ---------------------------------------------------------------------------
@@ -231,6 +232,8 @@ Key features:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    app.include_router(demo_router)
 
     return app
 
