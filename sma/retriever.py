@@ -24,6 +24,7 @@ import numpy as np
 from openai import OpenAI
 
 from sma.memory_store import MemoryRecord, MemoryStore
+from sma.retry_utils import with_retry
 
 
 # ---------------------------------------------------------------------------
@@ -57,24 +58,44 @@ class EmbeddingClient:
         self._client = OpenAI(api_key=key, base_url=self.BASE_URL)
 
     def embed(self, text: str) -> List[float]:
-        """Embed a single text string. Returns float list."""
-        resp = self._client.embeddings.create(
-            model=self.MODEL,
-            input=text,
-        )
-        return resp.data[0].embedding
+        """Embed a single text string. Returns float list.
+
+        Retries up to 3x on transient errors (timeout, rate limit, 5xx)
+        before raising — so a single API blip doesn't immediately
+        degrade to "no embedding" for the caller.
+        """
+        def _call():
+            resp = self._client.embeddings.create(
+                model=self.MODEL,
+                input=text,
+            )
+            return resp.data[0].embedding
+
+        result, error = with_retry(_call, max_attempts=3, base_delay=0.5)
+        if error:
+            raise RuntimeError(f"embed_failed_after_retries: {error}")
+        return result
 
     def embed_batch(self, texts: List[str]) -> List[List[float]]:
-        """Embed multiple texts in one API call (more efficient)."""
+        """Embed multiple texts in one API call (more efficient).
+
+        Retries up to 3x on transient errors before raising.
+        """
         if not texts:
             return []
-        resp = self._client.embeddings.create(
-            model=self.MODEL,
-            input=texts,
-        )
-        # Sort by index to preserve order
-        sorted_data = sorted(resp.data, key=lambda x: x.index)
-        return [item.embedding for item in sorted_data]
+
+        def _call():
+            resp = self._client.embeddings.create(
+                model=self.MODEL,
+                input=texts,
+            )
+            sorted_data = sorted(resp.data, key=lambda x: x.index)
+            return [item.embedding for item in sorted_data]
+
+        result, error = with_retry(_call, max_attempts=3, base_delay=0.5)
+        if error:
+            raise RuntimeError(f"embed_batch_failed_after_retries: {error}")
+        return result
 
 
 # ---------------------------------------------------------------------------
