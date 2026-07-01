@@ -83,6 +83,7 @@ class ContextManager:
         self,
         retrieval_results: List[RetrievalResult],
         recent_memories: Optional[List[MemoryRecord]] = None,
+        token_budget: Optional[int] = None,
     ) -> ContextBlock:
         """
         Build a context block from retrieval results and optional recents.
@@ -90,7 +91,13 @@ class ContextManager:
         Args:
             retrieval_results: From MemoryRetriever.recall() or .surface()
             recent_memories:   Latest memories from current session (no embedding needed)
+            token_budget:      Per-call budget override. If None, uses self.token_budget.
+                               Passing this explicitly (rather than mutating
+                               self.token_budget) keeps this method safe to call
+                               concurrently from multiple requests/threads.
         """
+        budget = token_budget if token_budget is not None else self.token_budget
+
         # Score and rank all candidates
         ranked = self._rank(retrieval_results, recent_memories or [])
 
@@ -100,7 +107,7 @@ class ContextManager:
         disputed = [(r, s) for r, s in ranked if getattr(r, "audit_disputed", False)]
 
         # Build memory text within budget
-        budget_left = self.token_budget
+        budget_left = budget
         memory_lines: List[str] = []
         warning_lines: List[str] = []
         sources: List[str] = []
@@ -116,7 +123,7 @@ class ContextManager:
             budget_left -= tokens
 
         # Caution memories (smaller budget)
-        caution_budget = min(budget_left, self.token_budget // 4)
+        caution_budget = min(budget_left, budget // 4)
         for record, score in caution + disputed:
             line = self._format_memory(record, score, is_warning=True)
             tokens = _estimate_tokens(line)
