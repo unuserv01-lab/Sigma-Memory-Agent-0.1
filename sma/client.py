@@ -272,16 +272,20 @@ class SMAClient:
         min_quality: Optional[str] = None,
         limit: int = 5,
         as_context: bool = False,
+        token_budget: Optional[int] = None,
     ) -> Any:
         """
         Retrieve memories semantically similar to query.
 
         Args:
-            query:       Natural language query
-            domain:      Restrict to domain (optional)
-            min_quality: Minimum quality level to include (optional)
-            limit:       Max results
-            as_context:  If True, return formatted ContextBlock instead of raw list
+            query:        Natural language query
+            domain:       Restrict to domain (optional)
+            min_quality:  Minimum quality level to include (optional)
+            limit:        Max results
+            as_context:   If True, return formatted ContextBlock instead of raw list
+            token_budget: Per-call context token budget override (only used when
+                         as_context=True). Safe to call concurrently — does not
+                         mutate shared state.
 
         Returns:
             List[RetrievalResult] OR ContextBlock (if as_context=True)
@@ -291,7 +295,8 @@ class SMAClient:
             records = self._store.get_by_domain(domain or "", limit=limit,
                                                  min_quality=min_quality)
             if as_context:
-                return self._ctx_mgr.build([], recent_memories=records)
+                return self._ctx_mgr.build([], recent_memories=records,
+                                           token_budget=token_budget)
             return []
 
         results = self._retriever.recall(
@@ -303,7 +308,8 @@ class SMAClient:
 
         if as_context:
             recent = self._store.recent(limit=3, domain=domain)
-            return self._ctx_mgr.build(results, recent_memories=recent)
+            return self._ctx_mgr.build(results, recent_memories=recent,
+                                       token_budget=token_budget)
 
         return results
 
@@ -323,11 +329,13 @@ class SMAClient:
 
         Returns formatted string with relevant memories + cautionary warnings.
         Empty string if no relevant memories found.
-        """
-        if max_tokens:
-            self._ctx_mgr.token_budget = max_tokens
 
-        block: ContextBlock = self.recall(situation, domain=domain, as_context=True)
+        Safe for concurrent use: max_tokens is passed through per-call rather
+        than mutating shared ContextManager state.
+        """
+        block: ContextBlock = self.recall(
+            situation, domain=domain, as_context=True, token_budget=max_tokens
+        )
         parts = []
         if block.memories_text:
             parts.append(block.memories_text)
