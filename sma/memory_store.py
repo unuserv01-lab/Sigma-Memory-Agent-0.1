@@ -327,17 +327,27 @@ class MemoryStore:
         limit: int = 20,
     ) -> List[MemoryRecord]:
         """Surface the most regret-heavy decisions for learning."""
-        domain_filter = f"AND domain='{domain}'" if domain else ""
         with self._conn() as conn:
-            rows = conn.execute(
-                f"""
-                SELECT * FROM memories
-                WHERE regret_score >= ? {domain_filter}
-                ORDER BY regret_score DESC
-                LIMIT ?
-                """,
-                (min_regret, limit),
-            ).fetchall()
+            if domain:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM memories
+                    WHERE regret_score >= ? AND domain = ?
+                    ORDER BY regret_score DESC
+                    LIMIT ?
+                    """,
+                    (min_regret, domain, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM memories
+                    WHERE regret_score >= ?
+                    ORDER BY regret_score DESC
+                    LIMIT ?
+                    """,
+                    (min_regret, limit),
+                ).fetchall()
         return [self._row_to_record(r) for r in rows]
 
     def get_with_embeddings(
@@ -347,33 +357,54 @@ class MemoryStore:
         limit: int = 500,
     ) -> List[MemoryRecord]:
         """Return records that have embeddings, for similarity search."""
-        domain_filter = f"AND domain='{domain}'" if domain else ""
         quality_filter = self._quality_filter(min_quality)
         with self._conn() as conn:
-            rows = conn.execute(
-                f"""
-                SELECT * FROM memories
-                WHERE embedding IS NOT NULL
-                {domain_filter} {quality_filter}
-                ORDER BY timestamp DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+            if domain:
+                rows = conn.execute(
+                    f"""
+                    SELECT * FROM memories
+                    WHERE embedding IS NOT NULL
+                    AND domain = ?
+                    {quality_filter}
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (domain, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    f"""
+                    SELECT * FROM memories
+                    WHERE embedding IS NOT NULL
+                    {quality_filter}
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
         return [self._row_to_record(r) for r in rows]
 
     def recent(self, limit: int = 10, domain: Optional[str] = None) -> List[MemoryRecord]:
-        domain_filter = f"AND domain='{domain}'" if domain else ""
         with self._conn() as conn:
-            rows = conn.execute(
-                f"""
-                SELECT * FROM memories
-                WHERE 1=1 {domain_filter}
-                ORDER BY timestamp DESC
-                LIMIT ?
-                """,
-                (limit,),
-            ).fetchall()
+            if domain:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM memories
+                    WHERE domain = ?
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (domain, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """
+                    SELECT * FROM memories
+                    ORDER BY timestamp DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
         return [self._row_to_record(r) for r in rows]
 
     # ------------------------------------------------------------------
@@ -381,47 +412,55 @@ class MemoryStore:
     # ------------------------------------------------------------------
 
     def stats(self, domain: Optional[str] = None) -> MemoryStats:
-        domain_clause = f"domain='{domain}'" if domain else None
+        params: List[Any] = []
+        base_where = ""
+        if domain:
+            base_where = "WHERE domain = ?"
+            params = [domain]
 
-        def _where(*conditions) -> str:
-            active = [c for c in conditions if c]
-            return ("WHERE " + " AND ".join(active)) if active else ""
+        def _extend(clause: str) -> str:
+            if not base_where:
+                return f"WHERE {clause}"
+            return f"{base_where} AND {clause}"
 
         with self._conn() as conn:
             total = conn.execute(
-                f"SELECT COUNT(*) FROM memories {_where(domain_clause)}"
+                f"SELECT COUNT(*) FROM memories {base_where}", params
             ).fetchone()[0]
 
             quality_rows = conn.execute(
                 f"""
                 SELECT quality, COUNT(*) as cnt
-                FROM memories {_where(domain_clause)}
+                FROM memories {base_where}
                 GROUP BY quality
-                """
+                """,
+                params,
             ).fetchall()
             by_quality = {r[0]: r[1] for r in quality_rows}
 
             domain_rows = conn.execute(
                 f"""
                 SELECT domain, COUNT(*) as cnt
-                FROM memories {_where(domain_clause)}
+                FROM memories {base_where}
                 GROUP BY domain
-                """
+                """,
+                params,
             ).fetchall()
             by_domain = {r[0]: r[1] for r in domain_rows}
 
             avg_regret = conn.execute(
                 f"""
                 SELECT AVG(regret_score)
-                FROM memories {_where(domain_clause, 'regret_score >= 0')}
-                """
+                FROM memories {_extend('regret_score >= 0')}
+                """,
+                params,
             ).fetchone()[0] or 0.0
 
             disputed = conn.execute(
                 f"""
-                SELECT COUNT(*) FROM memories
-                {_where(domain_clause, 'audit_disputed=1')}
-                """
+                SELECT COUNT(*) FROM memories {_extend('audit_disputed=1')}
+                """,
+                params,
             ).fetchone()[0]
 
         return MemoryStats(
