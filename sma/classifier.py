@@ -30,6 +30,8 @@ from typing import Any, Callable, Dict, Optional
 
 from openai import OpenAI
 
+from sma.retry_utils import with_retry
+
 
 # ---------------------------------------------------------------------------
 # Types
@@ -202,7 +204,8 @@ class MemoryClassifier:
 
     def _qwen_classify(self, entry: Dict[str, Any]):
         prompt = self._build_classification_prompt(entry)
-        try:
+
+        def _call():
             resp = self._qwen.chat.completions.create(
                 model=self.QWEN_MODEL,
                 messages=[
@@ -212,17 +215,31 @@ class MemoryClassifier:
                 temperature=self.temperature,
                 max_tokens=512,
             )
-            raw = resp.choices[0].message.content.strip()
-            return self._parse_classification_response(raw)
-        except Exception as e:
-            return "MEDIUM", f"qwen_error: {str(e)[:100]}"
+            return resp.choices[0].message.content.strip()
+
+        raw, error = with_retry(_call, max_attempts=3, base_delay=0.5)
+
+        if error:
+            return "MEDIUM", f"qwen_error: {error}"
+        return self._parse_classification_response(raw)
 
     def _rubric_classify(self, entry: Dict[str, Any]):
         """Evaluate developer-provided rule-based rubric.
-        Order matters: specific patterns (FALSE_EDGE, LUCKY) checked before
-        general ones (MEDIUM, LOW) to prevent early misclassification.
+
+        Order matters, and it's defensive by design: dangerous patterns
+        (FALSE_EDGE, LUCKY) are checked BEFORE the positive-sounding ones
+        (HIGH, MEDIUM). This protects against a common integration mistake
+        where a developer's HIGH rubric is defined loosely (e.g. just
+        "pnl_pct > 2.0") without excluding the case where the signal
+        wasn't actually followed. Without this ordering, an entry that's
+        genuinely LUCKY (big win despite bad process) could get matched
+        by a loose HIGH condition first and be misclassified — defeating
+        the entire point of having LUCKY/FALSE_EDGE categories.
+
+        Checking danger first means: an entry is only ever classified
+        HIGH if it does NOT also match FALSE_EDGE or LUCKY criteria.
         """
-        for level in ["HIGH", "FALSE_EDGE", "LUCKY", "MEDIUM", "LOW"]:
+        for level in ["FALSE_EDGE", "LUCKY", "HIGH", "MEDIUM", "LOW"]:
             fn = self.quality_rubric.get(level)
             if fn:
                 try:
@@ -287,7 +304,8 @@ class MemoryClassifier:
         regret_score: float,
     ):
         prompt = self._build_audit_prompt(entry, qwen_class, qwen_reason, regret_score)
-        try:
+
+        def _call():
             resp = self._deepseek.chat.completions.create(
                 model=self.DEEPSEEK_MODEL,
                 messages=[
@@ -297,10 +315,13 @@ class MemoryClassifier:
                 temperature=self.temperature,
                 max_tokens=512,
             )
-            raw = resp.choices[0].message.content.strip()
-            return self._parse_audit_response(raw)
-        except Exception as e:
-            return "SKIPPED", qwen_class, f"deepseek_error: {str(e)[:100]}"
+            return resp.choices[0].message.content.strip()
+
+        raw, error = with_retry(_call, max_attempts=3, base_delay=0.5)
+
+        if error:
+            return "SKIPPED", qwen_class, f"deepseek_error: {error}"
+        return self._parse_audit_response(raw)
 
     # ------------------------------------------------------------------
     # Step 4: Consensus resolution
